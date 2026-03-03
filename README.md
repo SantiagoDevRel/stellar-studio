@@ -17,3 +17,7 @@ A single-page web app where you describe a token in plain English, Claude AI par
 4. Creates trustline, sets auth_required / auth_revocable / clawback flags
 5. Mints tokens with a real payment operation
 6. Shows live transaction link on stellar.expert explorer
+
+## License
+
+MIT
