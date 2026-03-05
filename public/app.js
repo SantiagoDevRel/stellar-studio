@@ -35,8 +35,13 @@ function initStars() {
 // === State ===
 const conversationHistory = [];
 let isWaiting = false;
+let apiKey = '';
 
 // === DOM Refs ===
+const apiKeyScreen = document.getElementById('apiKeyScreen');
+const apiKeyInput = document.getElementById('apiKeyInput');
+const apiKeyBtn = document.getElementById('apiKeyBtn');
+const mainApp = document.getElementById('mainApp');
 const chatMessages = document.getElementById('chatMessages');
 const userInput = document.getElementById('userInput');
 const sendBtn = document.getElementById('sendBtn');
@@ -109,12 +114,12 @@ async function sendToClaud(userText) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages: conversationHistory }),
+    body: JSON.stringify({ messages: conversationHistory, apiKey }),
   });
 
-  if (!res.ok) throw new Error('API request failed');
-
   const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'API request failed');
+
   const reply = data.reply;
 
   conversationHistory.push({ role: 'assistant', content: reply });
@@ -397,7 +402,10 @@ async function handleSend() {
     }
   } catch (error) {
     removeTyping();
-    addMessage('assistant', 'Sorry, something went wrong. Please try again.');
+    const msg = error.message.includes('authentication')
+      ? 'Invalid API key. Please refresh and try again with a valid key.'
+      : `Sorry, something went wrong: ${error.message}`;
+    addMessage('assistant', msg);
     console.error(error);
   }
 
@@ -406,10 +414,28 @@ async function handleSend() {
   userInput.focus();
 }
 
+// === API Key Screen ===
+function handleApiKey() {
+  const key = apiKeyInput.value.trim();
+  if (!key || !key.startsWith('sk-')) return;
+
+  apiKey = key;
+  apiKeyScreen.classList.add('hidden');
+  mainApp.classList.remove('hidden');
+  userInput.focus();
+}
+
 // === Event Listeners ===
 document.addEventListener('DOMContentLoaded', () => {
   initStars();
 
+  // API key screen
+  apiKeyBtn.addEventListener('click', handleApiKey);
+  apiKeyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleApiKey();
+  });
+
+  // Chat
   sendBtn.addEventListener('click', handleSend);
 
   userInput.addEventListener('keydown', (e) => {

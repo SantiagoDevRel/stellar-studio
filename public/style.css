@@ -541,6 +541,105 @@ textarea::placeholder {
   to { transform: rotate(360deg); }
 }
 
+/* === Hidden Utility === */
+.hidden {
+  display: none !important;
+}
+
+/* === API Key Screen === */
+.api-key-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.api-key-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 48px 40px;
+  max-width: 480px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 0 60px rgba(99, 102, 241, 0.1);
+  animation: fade-in 0.5s ease;
+}
+
+.api-key-card .logo {
+  margin-bottom: 24px;
+}
+
+.api-key-desc {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 28px;
+}
+
+.api-key-input-wrapper {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.api-key-input-wrapper input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: var(--text-primary);
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.api-key-input-wrapper input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.api-key-input-wrapper input::placeholder {
+  color: var(--text-hint);
+}
+
+.api-key-btn {
+  background: var(--accent);
+  border: none;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.api-key-btn:hover {
+  background: var(--accent-bright);
+  transform: translateY(-1px);
+}
+
+.api-key-hint {
+  color: var(--text-hint);
+  font-size: 12px;
+}
+
+.api-key-hint a {
+  color: var(--accent-bright);
+  text-decoration: none;
+}
+
+.api-key-hint a:hover {
+  text-decoration: underline;
+}
+
 /* === Responsive === */
 @media (max-width: 768px) {
   .main {

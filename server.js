@@ -1,4 +1,3 @@
-import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
@@ -7,14 +6,11 @@ import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-dotenv.config({ path: join(__dirname, '.env'), override: true });
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const SYSTEM_PROMPT = `You are the Stellar Token Studio wizard. You help users create real tokens (Native Assets) on the Stellar Testnet.
 
@@ -54,7 +50,13 @@ Rules:
 
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages } = req.body;
+    const { messages, apiKey } = req.body;
+
+    if (!apiKey) {
+      return res.status(400).json({ error: 'API key is required' });
+    }
+
+    const anthropic = new Anthropic({ apiKey });
 
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -67,7 +69,7 @@ app.post('/api/chat', async (req, res) => {
     res.json({ reply: text });
   } catch (error) {
     console.error('Claude API error:', error.message);
-    res.status(500).json({ error: 'Failed to get response from Claude' });
+    res.status(500).json({ error: error.message || 'Failed to get response from Claude' });
   }
 });
 
