@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stellar Token Studio</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="stars"></canvas>
+
+  <div class="app">
+    <header class="header">
+      <div class="logo">
+        <span class="logo-icon">&#9733;</span>
+        <h1>Stellar Token Studio</h1>
+      </div>
+      <p class="subtitle">Describe your token idea — Claude will guide you through creating it on Stellar Testnet</p>
+    </header>
+
+    <main class="main">
+      <div class="chat-container" id="chatContainer">
+        <div class="chat-messages" id="chatMessages">
+          <div class="message assistant">
+            <div class="message-avatar">&#9733;</div>
+            <div class="message-bubble">
+              <p>Welcome to Stellar Token Studio! Tell me about the token you'd like to create.</p>
+              <p class="hint">Try: "I want a loyalty token for my coffee shop" or "Create a CBDC with compliance controls"</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input-area">
+          <div class="input-wrapper">
+            <textarea
+              id="userInput"
+              placeholder="Describe your token idea..."
+              rows="1"
+              autocomplete="off"
+            ></textarea>
+            <button id="sendBtn" class="send-btn" title="Send">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-panel" id="resultPanel">
+        <!-- Token result card and comparison card will appear here -->
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/stellar-sdk/11.3.0/stellar-sdk.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
