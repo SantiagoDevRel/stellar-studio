@@ -9,11 +9,12 @@ An AI-powered web app where you describe your token idea in plain English, Claud
 4. **Token created live** — real transaction on Stellar Testnet in ~5 seconds
 5. **Comparison card appears** — Stellar vs Ethereum ERC-20 side by side
 
-## Why Native Assets (not smart contracts)
-All tokens are created as Stellar Native Assets — no smart contract,
-no audit required, protocol-level compliance flags built in.
-SAC (Stellar Asset Contract) deployment is shown as a "what's next"
-for DeFi use cases.
+## Why Native Assets vs SAC/SEP41
+Stellar supports two token models:
+- **Native Assets (SEP-0041 compatible)** — created at protocol level, no smart contract needed, no audit required, compliance flags (auth_required, auth_revocable, clawback) built in. This is what Stellar Token Studio creates.
+- **SAC (Stellar Asset Contract)** — wraps a Native Asset into a Soroban smart contract, enabling DeFi interactions (AMMs, lending, etc.). Shown as a "what's next" step after token creation.
+
+This demo focuses on Native Assets because they cover 90% of real-world token use cases (loyalty points, stablecoins, CBDCs, equity tokens) without writing or auditing a single line of smart contract code.
 
 ## Tech Stack
 - Vanilla HTML/CSS/JS (no framework)
