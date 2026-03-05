@@ -36,6 +36,7 @@ function initStars() {
 const conversationHistory = [];
 let isWaiting = false;
 let apiKey = '';
+let tokenState = null;
 
 // === DOM Refs ===
 const apiKeyScreen = document.getElementById('apiKeyScreen');
@@ -67,7 +68,6 @@ function addMessage(role, text) {
 }
 
 function formatMessage(text) {
-  // Convert markdown-like formatting to HTML
   return text
     .split('\n')
     .map(line => {
@@ -148,22 +148,18 @@ async function createStellarToken(config) {
   const server = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
 
   try {
-    // Step 1: Generate keypairs
     updateCreatingStep(overlay, 'Generating issuer and distributor accounts...');
     const issuerKeypair = StellarSdk.Keypair.random();
     const distributorKeypair = StellarSdk.Keypair.random();
 
-    // Step 2: Fund both accounts via Friendbot
     updateCreatingStep(overlay, 'Funding accounts via Stellar Friendbot...');
     await Promise.all([
       fetch(`https://friendbot.stellar.org?addr=${issuerKeypair.publicKey()}`),
       fetch(`https://friendbot.stellar.org?addr=${distributorKeypair.publicKey()}`),
     ]);
 
-    // Wait for accounts to be available
     await new Promise(r => setTimeout(r, 2000));
 
-    // Step 3: Set compliance flags on issuer
     updateCreatingStep(overlay, 'Setting compliance flags on issuer...');
     const issuerAccount = await server.loadAccount(issuerKeypair.publicKey());
     const asset = new StellarSdk.Asset(config.code, issuerKeypair.publicKey());
@@ -186,7 +182,6 @@ async function createStellarToken(config) {
       await server.submitTransaction(flagTx);
     }
 
-    // Step 4: Create trustline from distributor to issuer
     updateCreatingStep(overlay, 'Creating trustline...');
     const distributorAccount = await server.loadAccount(distributorKeypair.publicKey());
 
@@ -201,7 +196,6 @@ async function createStellarToken(config) {
     trustTx.sign(distributorKeypair);
     await server.submitTransaction(trustTx);
 
-    // Step 4b: If auth_required, authorize the trustline
     if (config.auth_required) {
       updateCreatingStep(overlay, 'Authorizing trustline...');
       const issuerAccount2 = await server.loadAccount(issuerKeypair.publicKey());
@@ -221,7 +215,6 @@ async function createStellarToken(config) {
       await server.submitTransaction(authTx);
     }
 
-    // Step 5: Mint tokens
     updateCreatingStep(overlay, `Minting ${config.supply.toLocaleString()} ${config.code} tokens...`);
     const issuerAccount3 = await server.loadAccount(issuerKeypair.publicKey());
 
@@ -240,12 +233,83 @@ async function createStellarToken(config) {
     mintTx.sign(issuerKeypair);
     const mintResult = await server.submitTransaction(mintTx);
 
-    // Done!
-    removeCreatingOverlay(overlay);
-    showTokenResult(config, issuerKeypair.publicKey(), distributorKeypair.publicKey(), mintResult.hash);
-    showComparisonCard();
+    // Create 2 demo holder accounts to showcase admin features
+    const demoHolders = [];
+    for (let i = 1; i <= 2; i++) {
+      updateCreatingStep(overlay, `Creating demo holder account ${i}/2...`);
+      const holderKp = StellarSdk.Keypair.random();
 
-    addMessage('assistant', `Your **${config.code}** token has been created successfully on Stellar Testnet! Check the result panel for details and the explorer link.`);
+      // Fund via friendbot
+      await fetch(`https://friendbot.stellar.org?addr=${holderKp.publicKey()}`);
+
+      // Establish trustline
+      updateCreatingStep(overlay, `Setting up trustline for holder ${i}/2...`);
+      const holderAccount = await server.loadAccount(holderKp.publicKey());
+      const trustTx = new StellarSdk.TransactionBuilder(holderAccount, {
+        fee: StellarSdk.BASE_FEE,
+        networkPassphrase: StellarSdk.Networks.TESTNET,
+      })
+        .addOperation(StellarSdk.Operation.changeTrust({ asset }))
+        .setTimeout(30)
+        .build();
+      trustTx.sign(holderKp);
+      await server.submitTransaction(trustTx);
+
+      // If auth_required, authorize this holder
+      if (config.auth_required) {
+        const issuerAcc = await server.loadAccount(issuerKeypair.publicKey());
+        const authHolderTx = new StellarSdk.TransactionBuilder(issuerAcc, {
+          fee: StellarSdk.BASE_FEE,
+          networkPassphrase: StellarSdk.Networks.TESTNET,
+        })
+          .addOperation(StellarSdk.Operation.setTrustLineFlags({
+            trustor: holderKp.publicKey(),
+            asset,
+            flags: { authorized: true },
+          }))
+          .setTimeout(30)
+          .build();
+        authHolderTx.sign(issuerKeypair);
+        await server.submitTransaction(authHolderTx);
+      }
+
+      // Send 100 tokens from distributor
+      updateCreatingStep(overlay, `Sending 100 ${config.code} to holder ${i}/2...`);
+      const distAcc = await server.loadAccount(distributorKeypair.publicKey());
+      const payTx = new StellarSdk.TransactionBuilder(distAcc, {
+        fee: StellarSdk.BASE_FEE,
+        networkPassphrase: StellarSdk.Networks.TESTNET,
+      })
+        .addOperation(StellarSdk.Operation.payment({
+          destination: holderKp.publicKey(),
+          asset,
+          amount: '100',
+        }))
+        .setTimeout(30)
+        .build();
+      payTx.sign(distributorKeypair);
+      await server.submitTransaction(payTx);
+
+      demoHolders.push(holderKp);
+    }
+
+    // Store state for admin dashboard
+    // totalMinted tracks all tokens ever created; totalBurned tracks clawbacks
+    tokenState = {
+      config,
+      issuerKeypair,
+      distributorKeypair,
+      demoHolders,
+      asset,
+      txHash: mintResult.hash,
+      server,
+      totalMinted: config.supply + 200,  // initial supply + 100 per demo holder
+      totalBurned: 0,
+    };
+
+    removeCreatingOverlay(overlay);
+    showAdminDashboard();
+    addMessage('assistant', `Your **${config.code}** token has been created successfully on Stellar Testnet! Two demo holder accounts were created with 100 ${config.code} each so you can try freeze, unfreeze, and clawback from the admin dashboard.`);
 
   } catch (error) {
     removeCreatingOverlay(overlay);
@@ -279,98 +343,436 @@ function removeCreatingOverlay(overlay) {
   overlay.remove();
 }
 
-// === Token Result Card ===
-function showTokenResult(config, issuerPublic, distributorPublic, txHash) {
+// === Horizon Queries ===
+async function fetchTokenHolders() {
+  const { asset, server } = tokenState;
+  const accounts = await server.accounts().forAsset(asset).limit(50).call();
+
+  return accounts.records.map(account => {
+    const balance = account.balances.find(
+      b => b.asset_code === asset.getCode() && b.asset_issuer === asset.getIssuer()
+    );
+    return {
+      accountId: account.account_id,
+      balance: balance ? balance.balance : '0',
+      isAuthorized: balance ? balance.is_authorized : false,
+      isAuthorizedToMaintainLiabilities: balance ? balance.is_authorized_to_maintain_liabilities : false,
+      isDistributor: account.account_id === tokenState.distributorKeypair.publicKey(),
+    };
+  });
+}
+
+// === Admin Transactions ===
+async function freezeAccount(trustorPublicKey) {
+  const { issuerKeypair, asset, server } = tokenState;
+  const StellarSdk = window.StellarSdk;
+  const issuerAccount = await server.loadAccount(issuerKeypair.publicKey());
+  const tx = new StellarSdk.TransactionBuilder(issuerAccount, {
+    fee: StellarSdk.BASE_FEE,
+    networkPassphrase: StellarSdk.Networks.TESTNET,
+  })
+    .addOperation(StellarSdk.Operation.setTrustLineFlags({
+      trustor: trustorPublicKey,
+      asset,
+      flags: { authorized: false, authorizedToMaintainLiabilities: true },
+    }))
+    .setTimeout(30)
+    .build();
+  tx.sign(issuerKeypair);
+  return await server.submitTransaction(tx);
+}
+
+async function unfreezeAccount(trustorPublicKey) {
+  const { issuerKeypair, asset, server } = tokenState;
+  const StellarSdk = window.StellarSdk;
+  const issuerAccount = await server.loadAccount(issuerKeypair.publicKey());
+  const tx = new StellarSdk.TransactionBuilder(issuerAccount, {
+    fee: StellarSdk.BASE_FEE,
+    networkPassphrase: StellarSdk.Networks.TESTNET,
+  })
+    .addOperation(StellarSdk.Operation.setTrustLineFlags({
+      trustor: trustorPublicKey,
+      asset,
+      flags: { authorized: true },
+    }))
+    .setTimeout(30)
+    .build();
+  tx.sign(issuerKeypair);
+  return await server.submitTransaction(tx);
+}
+
+async function clawbackTokens(fromPublicKey, amount) {
+  const { issuerKeypair, asset, server } = tokenState;
+  const StellarSdk = window.StellarSdk;
+  const issuerAccount = await server.loadAccount(issuerKeypair.publicKey());
+  const tx = new StellarSdk.TransactionBuilder(issuerAccount, {
+    fee: StellarSdk.BASE_FEE,
+    networkPassphrase: StellarSdk.Networks.TESTNET,
+  })
+    .addOperation(StellarSdk.Operation.clawback({
+      asset,
+      from: fromPublicKey,
+      amount: amount.toString(),
+    }))
+    .setTimeout(30)
+    .build();
+  tx.sign(issuerKeypair);
+  return await server.submitTransaction(tx);
+}
+
+async function mintTokens(amount) {
+  const { issuerKeypair, distributorKeypair, asset, server } = tokenState;
+  const StellarSdk = window.StellarSdk;
+  const issuerAccount = await server.loadAccount(issuerKeypair.publicKey());
+  const tx = new StellarSdk.TransactionBuilder(issuerAccount, {
+    fee: StellarSdk.BASE_FEE,
+    networkPassphrase: StellarSdk.Networks.TESTNET,
+  })
+    .addOperation(StellarSdk.Operation.payment({
+      destination: distributorKeypair.publicKey(),
+      asset,
+      amount: amount.toString(),
+    }))
+    .setTimeout(30)
+    .build();
+  tx.sign(issuerKeypair);
+  return await server.submitTransaction(tx);
+}
+
+// === Admin Dashboard UI ===
+function showAdminDashboard() {
+  const { config, issuerKeypair, distributorKeypair, txHash } = tokenState;
+  resultPanel.innerHTML = '';
   resultPanel.classList.add('visible');
 
-  const card = document.createElement('div');
-  card.className = 'token-card success';
-  card.innerHTML = `
-    <div class="token-card-header">
-      <div class="token-card-icon">\u2713</div>
+  // Dashboard header — compact
+  const header = document.createElement('div');
+  header.className = 'dashboard-header';
+  header.innerHTML = `
+    <div class="dashboard-title-row">
+      <div class="dashboard-icon">${config.code.slice(0, 2)}</div>
       <div>
-        <div class="token-card-title">${config.code} Created!</div>
-        <div class="token-card-subtitle">${config.name || config.code} \u2014 ${config.supply.toLocaleString()} tokens</div>
+        <div class="dashboard-title">${config.code}</div>
+        <div class="dashboard-subtitle">${config.name || config.code} \u2014 Admin Dashboard</div>
+      </div>
+      <a href="https://stellar.expert/explorer/testnet/tx/${txHash}" target="_blank" rel="noopener" class="explorer-link-small" style="margin-left:auto;margin-top:0">
+        Explorer \u2197
+      </a>
+    </div>
+  `;
+  resultPanel.appendChild(header);
+
+  // Supply stats bar (circulating supply + mint button)
+  const statsBar = document.createElement('div');
+  statsBar.className = 'dashboard-stats-bar';
+  statsBar.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-item">
+        <span class="stat-label">Circulating</span>
+        <span class="stat-value" id="circulatingSupply">\u2014</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Total Minted</span>
+        <span class="stat-value" id="mintedTotal">\u2014</span>
+      </div>
+      <div class="stat-item burned">
+        <span class="stat-label">\ud83d\udd25 Burned</span>
+        <span class="stat-value" id="totalBurned">0</span>
       </div>
     </div>
-    <div class="token-details">
-      <div class="token-detail">
-        <span class="token-detail-label">Token Code</span>
-        <span class="token-detail-value">${config.code}</span>
-      </div>
-      <div class="token-detail">
-        <span class="token-detail-label">Supply</span>
-        <span class="token-detail-value">${config.supply.toLocaleString()}</span>
-      </div>
+    <div class="mint-row">
+      <button class="action-btn mint-btn" id="mintBtn">\u2728 Mint Tokens</button>
+      <button class="info-btn" data-tooltip="Mint creates new tokens from the issuer and sends them to the distributor account. On Stellar, the issuer has unlimited minting power \u2014 there is no hard cap enforced by the protocol.">i</button>
+    </div>
+  `;
+  resultPanel.appendChild(statsBar);
+
+  // Wire mint button
+  document.getElementById('mintBtn').addEventListener('click', async () => {
+    const amount = prompt('How many ' + config.code + ' tokens to mint to the distributor?');
+    if (!amount || isNaN(amount) || parseFloat(amount) <= 0) return;
+    const btn = document.getElementById('mintBtn');
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.innerHTML = '<span class="mini-spinner"></span>Minting...';
+    try {
+      await mintTokens(amount);
+      tokenState.totalMinted += parseFloat(amount);
+      showActionToast('Minted ' + parseFloat(amount).toLocaleString() + ' ' + config.code);
+      await refreshHoldersList();
+    } catch (error) {
+      showActionToast('Mint failed: ' + error.message, true);
+    }
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.innerHTML = '\u2728 Mint Tokens';
+  });
+
+  // Wire info button in stats bar
+  statsBar.querySelectorAll('.info-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showTooltip(btn, btn.dataset.tooltip);
+    });
+  });
+
+  // Token info card — collapsed by default for space
+  const infoCard = document.createElement('div');
+  infoCard.className = 'dashboard-card token-info-card collapsed';
+  infoCard.innerHTML = `
+    <div class="dashboard-card-header" onclick="this.parentElement.classList.toggle('collapsed')">
+      <span>Token Details</span>
+      <span class="collapse-chevron">\u25BC</span>
+    </div>
+    <div class="dashboard-card-body">
       <div class="token-detail">
         <span class="token-detail-label">Issuer</span>
-        <span class="token-detail-value code">${issuerPublic.slice(0, 8)}...${issuerPublic.slice(-8)}</span>
+        <span class="token-detail-value code">${issuerKeypair.publicKey().slice(0, 8)}...${issuerKeypair.publicKey().slice(-8)}</span>
       </div>
       <div class="token-detail">
         <span class="token-detail-label">Distributor</span>
-        <span class="token-detail-value code">${distributorPublic.slice(0, 8)}...${distributorPublic.slice(-8)}</span>
+        <span class="token-detail-value code">${distributorKeypair.publicKey().slice(0, 8)}...${distributorKeypair.publicKey().slice(-8)}</span>
       </div>
-      <div class="token-detail">
-        <span class="token-detail-label">Auth Required</span>
-        <span class="flag-badge ${config.auth_required ? 'on' : 'off'}">${config.auth_required ? 'ON' : 'OFF'}</span>
-      </div>
-      <div class="token-detail">
-        <span class="token-detail-label">Auth Revocable</span>
-        <span class="flag-badge ${config.auth_revocable ? 'on' : 'off'}">${config.auth_revocable ? 'ON' : 'OFF'}</span>
-      </div>
-      <div class="token-detail">
-        <span class="token-detail-label">Clawback</span>
-        <span class="flag-badge ${config.clawback_enabled ? 'on' : 'off'}">${config.clawback_enabled ? 'ON' : 'OFF'}</span>
+      <div class="token-flags-row">
+        <div class="flag-with-info">
+          <span class="flag-badge ${config.auth_required ? 'on' : 'off'}">Auth Required: ${config.auth_required ? 'ON' : 'OFF'}</span>
+          <button class="info-btn" data-tooltip="AUTH_REQUIRED is a Stellar protocol flag. When ON, any account that wants to hold your token must first be approved by the issuer. Without approval, they can create a trustline but can't receive tokens. Used by regulated assets like bank tokens or securities.">i</button>
+        </div>
+        <div class="flag-with-info">
+          <span class="flag-badge ${config.auth_revocable ? 'on' : 'off'}">Revocable: ${config.auth_revocable ? 'ON' : 'OFF'}</span>
+          <button class="info-btn" data-tooltip="AUTH_REVOCABLE is a Stellar protocol flag. When ON, the issuer can freeze any account's ability to send or receive the token. The account keeps its balance but can't move it. Think of it like a bank freezing a suspicious account. Required for clawback to work.">i</button>
+        </div>
+        <div class="flag-with-info">
+          <span class="flag-badge ${config.clawback_enabled ? 'on' : 'off'}">Clawback: ${config.clawback_enabled ? 'ON' : 'OFF'}</span>
+          <button class="info-btn" data-tooltip="AUTH_CLAWBACK_ENABLED is a Stellar protocol flag. When ON, the issuer can pull tokens back from any holder's account — the tokens are burned (destroyed), reducing the circulating supply. Like a bank reversing a fraudulent transaction. Automatically enables auth_revocable.">i</button>
+        </div>
       </div>
     </div>
-    <a href="https://stellar.expert/explorer/testnet/tx/${txHash}" target="_blank" rel="noopener" class="explorer-link">
-      View on Stellar Explorer \u2197
-    </a>
   `;
+  resultPanel.appendChild(infoCard);
 
-  resultPanel.appendChild(card);
+  // Wire info buttons on flag badges
+  infoCard.querySelectorAll('.info-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showTooltip(btn, btn.dataset.tooltip);
+    });
+  });
+
+  // Holders section
+  const holdersSection = document.createElement('div');
+  holdersSection.className = 'dashboard-card holders-section';
+  holdersSection.innerHTML = `
+    <div class="holders-header">
+      <span>Token Holders</span>
+      <div class="holders-header-right">
+        <span class="holders-count" id="holdersCount">...</span>
+        <button class="refresh-btn" id="refreshHoldersBtn" title="Refresh holders">\u21BB</button>
+      </div>
+    </div>
+    <div class="holders-list" id="holdersList">
+      <div class="holders-loading"><div class="mini-spinner"></div>Loading holders...</div>
+    </div>
+  `;
+  resultPanel.appendChild(holdersSection);
+
+  document.getElementById('refreshHoldersBtn').addEventListener('click', refreshHoldersList);
+
+  refreshHoldersList();
 }
 
-// === Comparison Card ===
-function showComparisonCard() {
-  const card = document.createElement('div');
-  card.className = 'comparison-card';
-  card.innerHTML = `
-    <h3>Stellar vs Ethereum ERC-20</h3>
-    <table class="comparison-table">
-      <thead>
-        <tr>
-          <th></th>
-          <th>Stellar</th>
-          <th>Ethereum</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Time</td>
-          <td class="stellar">~5 seconds</td>
-          <td class="ethereum">30-60 min</td>
-        </tr>
-        <tr>
-          <td>Cost</td>
-          <td class="stellar">$0.00001</td>
-          <td class="ethereum">$5-80 gas</td>
-        </tr>
-        <tr>
-          <td>Code</td>
-          <td class="stellar">~15 lines</td>
-          <td class="ethereum">~200+ lines</td>
-        </tr>
-        <tr>
-          <td>Audit</td>
-          <td class="stellar">Not needed</td>
-          <td class="ethereum">Recommended</td>
-        </tr>
-      </tbody>
-    </table>
+async function refreshHoldersList() {
+  const listEl = document.getElementById('holdersList');
+  const countEl = document.getElementById('holdersCount');
+  if (!listEl || !countEl) return;
+
+  listEl.innerHTML = '<div class="holders-loading"><div class="mini-spinner"></div>Fetching holders...</div>';
+
+  try {
+    const holders = await fetchTokenHolders();
+    countEl.textContent = holders.length;
+    listEl.innerHTML = '';
+
+    // Update supply stats
+    const circulating = holders.reduce((sum, h) => sum + parseFloat(h.balance), 0);
+    const code = tokenState.config.code;
+    const circulatingEl = document.getElementById('circulatingSupply');
+    const mintedEl = document.getElementById('mintedTotal');
+    const burnedEl = document.getElementById('totalBurned');
+    if (circulatingEl) circulatingEl.textContent = circulating.toLocaleString() + ' ' + code;
+    if (mintedEl) mintedEl.textContent = tokenState.totalMinted.toLocaleString() + ' ' + code;
+    if (burnedEl) burnedEl.textContent = tokenState.totalBurned.toLocaleString() + ' ' + code;
+
+    if (holders.length === 0) {
+      listEl.innerHTML = '<div class="holders-empty">No holders found</div>';
+      return;
+    }
+
+    holders.forEach(holder => {
+      listEl.appendChild(createHolderRow(holder));
+    });
+  } catch (error) {
+    listEl.innerHTML = `<div class="holders-error">Failed to load: ${error.message}</div>`;
+  }
+}
+
+function createHolderRow(holder) {
+  const { config } = tokenState;
+  const row = document.createElement('div');
+  row.className = 'holder-row';
+
+  const truncId = `${holder.accountId.slice(0, 6)}...${holder.accountId.slice(-6)}`;
+  let label = '';
+  if (holder.isDistributor) {
+    label = '<span class="distributor-badge">Distributor</span>';
+  } else {
+    const demoIdx = (tokenState.demoHolders || []).findIndex(kp => kp.publicKey() === holder.accountId);
+    if (demoIdx >= 0) label = `<span class="distributor-badge demo">Holder ${demoIdx + 1}</span>`;
+  }
+
+  let authStatus = '';
+  if (config.auth_required || config.auth_revocable) {
+    if (holder.isAuthorized) {
+      authStatus = '<span class="auth-badge authorized">Authorized</span>';
+    } else if (holder.isAuthorizedToMaintainLiabilities) {
+      authStatus = '<span class="auth-badge frozen">Frozen</span>';
+    } else {
+      authStatus = '<span class="auth-badge unauthorized">Unauthorized</span>';
+    }
+  }
+
+  const freezeEnabled = config.auth_revocable || config.clawback_enabled;
+  const clawbackEnabled = config.clawback_enabled;
+  const isFrozen = !holder.isAuthorized && holder.isAuthorizedToMaintainLiabilities;
+
+  row.innerHTML = `
+    <div class="holder-info">
+      <div class="holder-account">
+        <span class="holder-id">${truncId}</span>${label}
+      </div>
+      <div class="holder-meta">
+        <span class="holder-balance">${parseFloat(holder.balance).toLocaleString()} ${config.code}</span>
+        ${authStatus}
+      </div>
+    </div>
+    <div class="holder-actions">
+      <div class="action-btn-wrapper">
+        <button class="action-btn ${freezeEnabled ? '' : 'disabled'} ${isFrozen ? 'active' : ''}"
+                data-action="${isFrozen ? 'unfreeze' : 'freeze'}"
+                ${freezeEnabled ? '' : 'disabled'}>
+          ${isFrozen ? '\u2600 Unfreeze' : '\u2744 Freeze'}
+        </button>
+        <button class="info-btn" data-tooltip="${freezeEnabled
+          ? (isFrozen
+            ? 'Unfreeze restores this account\u2019s ability to send and receive your token. Uses setTrustLineFlags to re-authorize the trustline.'
+            : 'Freeze prevents this account from sending or receiving your token. Uses the auth_revocable flag via setTrustLineFlags on the issuer.')
+          : 'Freeze is unavailable because this token was not created with the auth_revocable flag enabled.'}">i</button>
+      </div>
+      <div class="action-btn-wrapper">
+        <button class="action-btn ${clawbackEnabled ? '' : 'disabled'}"
+                data-action="clawback"
+                ${clawbackEnabled ? '' : 'disabled'}>
+          \u21A9 Clawback
+        </button>
+        <button class="info-btn" data-tooltip="${clawbackEnabled
+          ? 'Clawback BURNS (destroys) tokens from this account — they are permanently removed from circulation, not returned anywhere. The issuer can mint new tokens if needed. Uses Stellar\u2019s clawback operation.'
+          : 'Clawback is unavailable because this token was not created with the clawback_enabled flag.'}">i</button>
+      </div>
+    </div>
   `;
 
-  resultPanel.appendChild(card);
+  // Wire up action buttons
+  row.querySelectorAll('.action-btn:not(.disabled)').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const action = btn.dataset.action;
+      btn.disabled = true;
+      btn.classList.add('loading');
+
+      try {
+        if (action === 'freeze') {
+          await freezeAccount(holder.accountId);
+        } else if (action === 'unfreeze') {
+          await unfreezeAccount(holder.accountId);
+        } else if (action === 'clawback') {
+          const amount = prompt('How many ' + config.code + ' to claw back and BURN?\n\nCurrent balance: ' + holder.balance + '\n\nNote: clawed-back tokens are destroyed permanently.');
+          if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+            btn.disabled = false;
+            btn.classList.remove('loading');
+            return;
+          }
+          await clawbackTokens(holder.accountId, amount);
+          tokenState.totalBurned += parseFloat(amount);
+        }
+        showActionToast(action === 'clawback' ? 'Clawback successful — tokens burned' : action + ' successful');
+        await refreshHoldersList();
+      } catch (error) {
+        showActionToast(`${action} failed: ${error.message}`, true);
+        btn.disabled = false;
+        btn.classList.remove('loading');
+      }
+    });
+  });
+
+  // Wire up info buttons
+  row.querySelectorAll('.info-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showTooltip(btn, btn.dataset.tooltip);
+    });
+  });
+
+  return row;
+}
+
+// === Tooltip ===
+function showTooltip(anchor, text) {
+  const existing = document.querySelector('.admin-tooltip');
+  if (existing) existing.remove();
+
+  const tooltip = document.createElement('div');
+  tooltip.className = 'admin-tooltip';
+  tooltip.textContent = text;
+  document.body.appendChild(tooltip);
+
+  const rect = anchor.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const margin = 8;
+
+  // Vertical: prefer below, but flip above if it would overflow bottom
+  const spaceBelow = vh - rect.bottom - margin;
+  const spaceAbove = rect.top - margin;
+
+  if (spaceBelow >= tooltipRect.height + margin) {
+    tooltip.style.top = (rect.bottom + margin) + 'px';
+  } else if (spaceAbove >= tooltipRect.height + margin) {
+    tooltip.style.top = (rect.top - tooltipRect.height - margin) + 'px';
+  } else {
+    // Neither fits well — center vertically and cap within viewport
+    tooltip.style.top = Math.max(margin, Math.min(vh - tooltipRect.height - margin, rect.top - tooltipRect.height / 2)) + 'px';
+  }
+
+  // Horizontal: center on button, but clamp within viewport
+  let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+  left = Math.max(margin, Math.min(left, vw - tooltipRect.width - margin));
+  tooltip.style.left = left + 'px';
+
+  setTimeout(() => tooltip.remove(), 5000);
+  document.addEventListener('click', () => tooltip.remove(), { once: true });
+}
+
+// === Toast ===
+function showActionToast(message, isError = false) {
+  const toast = document.createElement('div');
+  toast.className = `action-toast ${isError ? 'error' : 'success'}`;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    toast.classList.add('fade-out');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
 }
 
 // === Send Message Handler ===
@@ -429,13 +831,11 @@ function handleApiKey() {
 document.addEventListener('DOMContentLoaded', () => {
   initStars();
 
-  // API key screen
   apiKeyBtn.addEventListener('click', handleApiKey);
   apiKeyInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') handleApiKey();
   });
 
-  // Chat
   sendBtn.addEventListener('click', handleSend);
 
   userInput.addEventListener('keydown', (e) => {
@@ -445,7 +845,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Auto-resize textarea
   userInput.addEventListener('input', () => {
     userInput.style.height = 'auto';
     userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
